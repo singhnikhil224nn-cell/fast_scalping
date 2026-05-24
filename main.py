@@ -10,8 +10,6 @@ import pandas as pd
 from datetime import datetime
 from loguru import logger
 
-# Import native pipeline, strategies, and risk control layers
-# (Ensure these modules exist in your project structure)
 try:
     from data.pipeline import DataPipeline
     from strategies.mean_reversion import MeanReversionStrategy
@@ -19,7 +17,6 @@ try:
     from core.risk_manager import PositionSizer
     from core.notifier import TelegramNotifier
 except ImportError:
-    # Fallback/Mock classes if external files are missing for testing
     logger.warning("Local strategy modules not found. Using placeholder classes.")
     class DataPipeline: pass
     class MeanReversionStrategy: pass
@@ -34,7 +31,7 @@ class HealthCheck(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Cloud Scalper Online")
     def log_message(self, format, *args): 
-        pass # Keep logs clean
+        pass 
 
 def start_server():
     port = int(os.environ.get("PORT", 10000))
@@ -80,13 +77,12 @@ class QuantitativeTradingEngine:
             # --- STRATEGY 3: BOLLINGER RUBBER BAND ---
             df['SMA_20'] = df['close'].rolling(window=20).mean()
             df['STD_20'] = df['close'].rolling(window=20).std()
-            df['Lower_Band'] = df['SMA_20'] - (df['STD_20'] * 2.5) # 2.5 deviation for extreme crashes
+            df['Lower_Band'] = df['SMA_20'] - (df['STD_20'] * 2.5) 
             
             # --- STRATEGY 4: MICRO-VWAP PULLBACK ---
             df['Typical_Price'] = (df['high'] + df['low'] + df['close']) / 3
             df['VWAP'] = (df['Typical_Price'] * df['volume']).cumsum() / df['volume'].cumsum()
             
-            # Extract latest values
             last_close = df['close'].iloc[-1]
             last_open = df['open'].iloc[-1]
             last_low = df['low'].iloc[-1]
@@ -98,71 +94,53 @@ class QuantitativeTradingEngine:
             take_profit = None
             strategy_name = None
             
-            # --- ALPHA MODULE: THE SHORT SQUEEZE RADAR (PRIORITY 0) ---
+            # --- ALPHA MODULE: THE SHORT SQUEEZE RADAR ---
             try:
-                # Fetch live derivatives data from KuCoin Futures
                 funding_data = await self.exchange.fetch_funding_rate(symbol)
-                
-                # Safely extract funding rate, forcing to float and defaulting to 0.0 if None
                 raw_fr = funding_data.get('fundingRate')
                 funding_rate = float(raw_fr) if raw_fr is not None else 0.0
                 
-                # Fetch Open Interest
                 oi_data = await self.exchange.fetch_open_interest(symbol)
-                
-                # CCXT unified key is 'openInterest', fallback to 'openInterestValue'
                 raw_oi = oi_data.get('openInterest') or oi_data.get('openInterestValue')
                 open_interest = float(raw_oi) if raw_oi is not None else 0.0
                 
                 logger.info(f"Derivatives Intel // Funding Rate: {funding_rate*100:.4f}% | OI: {open_interest:,.2f}")
                 
-                # The Squeeze Trigger Logic:
-                # If funding is deeply negative (shorts are paying longs) AND price is breaking up
                 if funding_rate < -0.0001 and df['close'].iloc[-1] > df['close'].iloc[-2]:
                     strategy_name = "☢️ HYPER-SQUEEZE (Liquidations Imminent)"
                     direction = "LONG"
-                    
-                    # Because squeezes are violent, we use a much wider stop and massive take-profit
-                    stop_loss = last_close * 0.990  # 1.0% stop to survive the volatility
-                    take_profit = last_close * 1.03 # 3.0% target to ride the cascade
-                    
-                    logger.warning(f"🚨 TRAP DETECTED: {symbol} Funding is negative ({funding_rate*100:.4f}%). Retail shorts are trapped.")
+                    stop_loss = last_close * 0.990  
+                    take_profit = last_close * 1.03 
+                    logger.warning(f"🚨 TRAP DETECTED: {symbol} Funding is negative. Retail shorts trapped.")
                     
             except Exception as e:
                 logger.error(f"Failed to fetch derivatives data for {symbol}: {e}")
 
-            # --- THE MULTI-STRATEGY RADAR ---
-            # If the Squeeze Radar didn't trigger, check the normal technicals
             if not direction:
-                # Priority 1: Bollinger Flash Crash (Best Reversal Entry)
                 if last_close < df['Lower_Band'].iloc[-1]:
                     strategy_name = "🪀 Bollinger Rubber Band (Flash Crash Bounce)"
                     direction = "LONG"
                     stop_loss = last_close * 0.995
                     take_profit = last_close * 1.015 
                     
-                # Priority 2: VWAP Dip Buy (Trend Continuation)
                 elif last_low <= df['VWAP'].iloc[-1] and last_close > df['VWAP'].iloc[-1] and df['close'].iloc[-2] > df['VWAP'].iloc[-2]:
                     strategy_name = "🎯 VWAP Pullback (Dip Buy)"
                     direction = "LONG"
                     stop_loss = last_close * 0.995
                     take_profit = last_close * 1.01
                     
-                # Priority 3: Volume Sledgehammer (Institutional Breakout)
                 elif last_vol > (avg_vol_20 * 4) and last_close > last_open:
                     strategy_name = "🔨 Volume Sledgehammer"
                     direction = "LONG"
                     stop_loss = last_close * 0.995
                     take_profit = last_close * 1.01
                     
-                # Priority 4: EMA Golden Cross (Standard Momentum)
                 elif df['EMA_9'].iloc[-2] <= df['EMA_21'].iloc[-2] and df['EMA_9'].iloc[-1] > df['EMA_21'].iloc[-1]:
                     strategy_name = "🚀 EMA Golden Cross"
                     direction = "LONG"
                     stop_loss = last_close * 0.995
                     take_profit = last_close * 1.01
                     
-                # Priority 5: EMA Death Cross
                 elif df['EMA_9'].iloc[-2] >= df['EMA_21'].iloc[-2] and df['EMA_9'].iloc[-1] < df['EMA_21'].iloc[-1]:
                     strategy_name = "🩸 EMA Death Cross"
                     direction = "SHORT"
@@ -172,56 +150,57 @@ class QuantitativeTradingEngine:
             if not direction:
                 return
             
-            # --- LEVEL 2 ORDER BOOK IMBALANCE (OBI) FILTER ---
-            logger.info(f"[{symbol}] {strategy_name} triggered. Fetching L2 Order Book data for execution verification...")
+            # --- THE EXECUTION GATE: LEVEL 2 OBI + LEVEL 1 CVD ---
+            logger.info(f"[{symbol}] {strategy_name} triggered. Fetching Order Flow (OBI & CVD)...")
             
             try:
-                # Pull the top 20 layers of the KuCoin order book
+                # 1. Pull the Order Book (Passive Intent)
                 order_book = await self.exchange.fetch_order_book(symbol, limit=20)
                 bids = order_book['bids'] 
                 asks = order_book['asks'] 
                 
-                # Calculate total volume sitting on the book
                 total_bid_vol = sum([vol for price, vol in bids])
                 total_ask_vol = sum([vol for price, vol in asks])
                 
-                # OBI Math: Ranges from -1.0 (100% Sellers) to +1.0 (100% Buyers)
-                if (total_bid_vol + total_ask_vol) > 0:
-                    obi = (total_bid_vol - total_ask_vol) / (total_bid_vol + total_ask_vol)
-                else:
-                    obi = 0.0
-                    
-                logger.info(f"Micro-Structure OBI: {obi:.2f} // Bids: {total_bid_vol:.2f} | Asks: {total_ask_vol:.2f}")
+                obi = (total_bid_vol - total_ask_vol) / (total_bid_vol + total_ask_vol) if (total_bid_vol + total_ask_vol) > 0 else 0.0
                 
-                # --- THE EXECUTION GATE ---
+                # 2. Pull the Trade History (Aggressive Action - CVD)
+                trades = await self.exchange.fetch_trades(symbol, limit=500)
+                
+                buy_vol = sum([trade['amount'] for trade in trades if trade['side'] == 'buy'])
+                sell_vol = sum([trade['amount'] for trade in trades if trade['side'] == 'sell'])
+                cvd = buy_vol - sell_vol
+                
+                logger.info(f"Order Flow // OBI: {obi:.2f} | CVD: {cvd:,.2f} (Buys: {buy_vol:.1f}, Sells: {sell_vol:.1f})")
+                
+                # --- THE FINAL DECISION MATRIX ---
                 trade_approved = False
                 
                 if direction == "LONG":
-                    if obi > 0.10: # Minimum 10% buy-side pressure advantage
-                        logger.success("OBI clears Bullish pressure. No major sell walls detected. TRADE APPROVED.")
+                    if obi > 0.10 or (cvd > (buy_vol + sell_vol) * 0.15): 
+                        logger.success("Order Flow clears LONG. Buyers are in control. TRADE APPROVED.")
                         trade_approved = True
                     else:
-                        logger.warning(f"🚨 TRADE ABORTED: LONG signal fired, but L2 flow is Bearish (OBI: {obi:.2f}). Huge Sell Wall ahead.")
+                        logger.warning(f"🚨 TRADE ABORTED: LONG signal, but Order Flow is weak (OBI: {obi:.2f}, CVD: {cvd:.2f}).")
                         
                 elif direction == "SHORT":
-                    if obi < -0.10: # Minimum 10% sell-side pressure advantage
-                        logger.success("OBI clears Bearish pressure. No major buy walls detected. TRADE APPROVED.")
+                    if obi < -0.10 or (cvd < -(buy_vol + sell_vol) * 0.15): 
+                        logger.success("Order Flow clears SHORT. Sellers are in control. TRADE APPROVED.")
                         trade_approved = True
                     else:
-                        logger.warning(f"🚨 TRADE ABORTED: SHORT signal fired, but L2 flow is Bullish (OBI: {obi:.2f}). Huge Buy Wall ahead.")
+                        logger.warning(f"🚨 TRADE ABORTED: SHORT signal, but Order Flow is weak (OBI: {obi:.2f}, CVD: {cvd:.2f}).")
                         
             except Exception as e:
-                logger.error(f"Failed to fetch L2 data. Aborting trade for safety. Error: {e}")
+                logger.error(f"Failed to fetch Order Flow data. Aborting for safety. Error: {e}")
                 trade_approved = False
 
-            # If the order book rejects the trade, stop here and do NOT send Telegram alert
             if not trade_approved:
                 return
 
             # --- FIRE SIGNAL ---
             logger.success(f"[{symbol}] {strategy_name} CONFIRMED! Firing Telegram signal.")
             
-            signal_text = f"⚡ FAST SCALP SIGNAL ⚡\nAsset: {symbol}\nStrategy: {strategy_name}\nAction: {direction}\n\n🎯 Entry Price: ${last_close:.4f}\n✅ Take Profit: ${take_profit:.4f}\n🚨 Stop Loss: ${stop_loss:.4f}\n📊 Order Book Imbalance: {obi:.2f}"
+            signal_text = f"⚡ FAST SCALP SIGNAL ⚡\nAsset: {symbol}\nStrategy: {strategy_name}\nAction: {direction}\n\n🎯 Entry Price: ${last_close:.4f}\n✅ Take Profit: ${take_profit:.4f}\n🚨 Stop Loss: ${stop_loss:.4f}\n📊 Order Book Imbalance: {obi:.2f}\n🌊 CVD Momentum: {cvd:.2f}"
             
             token = os.getenv('TELEGRAM_BOT_TOKEN')
             chat_id = os.getenv('TELEGRAM_CHAT_ID')
@@ -234,11 +213,9 @@ class QuantitativeTradingEngine:
     async def start_infinite_loop(self):
         logger.success("Multi-Asset Engine successfully deployed live into production.")
         
-        # FIX 1: Force CCXT to download the KuCoin Futures architecture before scanning
         logger.info("Loading KuCoin Futures market architecture...")
         await self.exchange.load_markets()
         
-        # FIX 2: Use explicit Perpetual Contract symbols
         self.target_assets = ['ETH/USDT:USDT', 'SOL/USDT:USDT']
         
         try:
@@ -249,7 +226,7 @@ class QuantitativeTradingEngine:
                         await self.run_cycle(symbol=asset)
                     except Exception as e:
                         logger.error(f"Scan failed for {asset}: {e}")
-                    await asyncio.sleep(2)  # Micro-pause to prevent KuCoin API bans
+                    await asyncio.sleep(2) 
                 
                 logger.info("Radar sweep complete. Sleeping for 60 seconds...")
                 await asyncio.sleep(60)
